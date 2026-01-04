@@ -209,16 +209,16 @@ class _TrendsScreenState extends State<TrendsScreen> {
                           reservedSize: 30, 
                           interval: data.length > 20 ? 5 : 1, // Agar angka tidak menumpuk
                           getTitlesWidget: (value, meta) {
-                             return Padding(
-                               padding: const EdgeInsets.only(top: 8.0),
-                               child: Text(
-                                 value.toInt().toString(),
-                                 style: TextStyle(
-                                   color: Colors.grey[600],
-                                   fontSize: 10,
-                                 ),
-                               ),
-                             );
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: Text(
+                                value.toInt().toString(),
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontSize: 10,
+                                ),
+                              ),
+                            );
                           },
                         ),
                       ),

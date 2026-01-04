@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:percent_indicator/percent_indicator.dart';
-// import 'package:fl_chart/fl_chart.dart'; // HAPUS INI (Tidak perlu chart di sini)
 import 'package:provider/provider.dart';
 import '../services/mqtt_service.dart';
 import '../models/sensor_model.dart';
+import '../services/notification_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   @override
@@ -12,46 +12,111 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // Local State untuk Motor (Safety & Slider)
   bool? _localSafetyState;
   double? _localSliderValue;
+
+  DateTime? _lastNotificationTime;
+  final NotificationService _notifService = NotificationService();
+
+  void _checkAndTriggerNotification(double gas, double temp) {
+    // Cek apakah kondisi Kritis atau Bahaya
+    bool isCritical = (gas > 60 && temp > 65);
+    bool isGasDanger = (gas > 60);
+    bool isTempDanger = (temp > 65);
+
+    if (isCritical || isGasDanger || isTempDanger) {
+      DateTime now = DateTime.now();
+
+      // Logika: Hanya bunyikan notif jika belum pernah bunyi, 
+      // atau sudah lewat 1 menit sejak notif terakhir.
+      if (_lastNotificationTime == null ||
+          now.difference(_lastNotificationTime!).inMinutes >= 1) {
+        
+        String title = "PERINGATAN KOMPOS!";
+        String body = "";
+
+        if (isCritical) {
+          body = "BAHAYA: Suhu & Gas Tinggi Sekaligus! Cek Segera!";
+        } else if (isGasDanger) {
+          body = "Gas Amonia Tinggi: ${gas.toStringAsFixed(0)}% (Batas 60%)";
+        } else if (isTempDanger) {
+          body = "Suhu Terlalu Panas: ${temp.toStringAsFixed(1)}°C";
+        }
+
+        // Panggil Notifikasi Pop-up
+        _notifService.showNotification(1, title, body, "alert_payload");
+        
+        // Update waktu terakhir notif
+        _lastNotificationTime = now;
+        print("Notifikasi dikirim: $body");
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final mqttService = Provider.of<MqttService>(context);
     final sensorData = mqttService.currentData;
-    // final history = mqttService.tempHistory; // HAPUS INI
 
     bool currentSafetyUI = _localSafetyState ?? sensorData.motorSw;
     double currentSpeedUI =
         _localSliderValue ?? sensorData.motorSpeed.toDouble();
     bool isFanOn = sensorData.fan == 1;
+    _checkAndTriggerNotification(sensorData.gas.toDouble(), sensorData.temp);
 
-    // --- LOGIKA STATUS KESEHATAN KOMPOS ---
-    String statusTitle = "Normal";
-    String statusDesc = "Kondisi kompos optimal.";
-    Color statusColor = Colors.green;
-    IconData statusIcon = Icons.check_circle;
+    // --- LOGIKA STATUS (MULTI-ALERT) ---
+    // Kita tampung semua peringatan dalam sebuah List
+    List<Widget> alertWidgets = [];
 
-    if (sensorData.gas > 500 && sensorData.temp > 33) {
-      statusTitle = "KONDISI KRITIS";
-      statusDesc = "Suhu & Gas berlebih! Segera buka penutup.";
-      statusColor = Color(0xFFB71C1C); // Merah Tua (Dark Red)
-      statusIcon = Icons.dangerous; // Ikon Bahaya
+    // 1. CEK SUHU (Cek Sendiri)
+    if (sensorData.temp > 65) {
+      alertWidgets.add(_buildStatusCard(
+          "Suhu Bahaya",
+          "Suhu panas (${sensorData.temp.toStringAsFixed(1)}°C). Kipas perlu nyala.",
+          Colors.red,
+          Icons.thermostat));
+      alertWidgets.add(SizedBox(height: 12)); // Spasi antar kartu
+    } else if (sensorData.temp > 45) {
+      alertWidgets.add(_buildStatusCard(
+          "Suhu Waspada",
+          "Suhu mulai naik (${sensorData.temp.toStringAsFixed(1)}°C).",
+          Colors.orange[800]!,
+          Icons.thermostat));
+      alertWidgets.add(SizedBox(height: 12));
     }
-    // 2. Cek Jika Hanya Gas Bermasalah
-    else if (sensorData.gas > 500) {
-      statusTitle = "Bahaya Gas";
-      statusDesc = "Kadar amonia tinggi! Cek ventilasi.";
-      statusColor = Colors.red;
-      statusIcon = Icons.warning;
+
+    // 2. CEK GAS (Cek Sendiri)
+    if (sensorData.gas > 60) {
+      alertWidgets.add(_buildStatusCard(
+          "Bahaya Gas",
+          "Kadar gas tinggi (${sensorData.gas}%). Cek ventilasi!",
+          Colors.red,
+          Icons.warning));
+      alertWidgets.add(SizedBox(height: 12));
+    } else if (sensorData.gas > 30) {
+      alertWidgets.add(_buildStatusCard(
+          "Waspada Gas",
+          "Gas mulai meningkat (${sensorData.gas}%).",
+          Colors.orange[800]!,
+          Icons.info));
+      alertWidgets.add(SizedBox(height: 12));
     }
-    // 3. Cek Jika Hanya Suhu Bermasalah
-    else if (sensorData.temp > 33) {
-      statusTitle = "Suhu Tinggi";
-      statusDesc = "Suhu panas. Kipas perlu dinyalakan.";
-      statusColor = Colors.orange[800]!; // Oranye Tua
-      statusIcon = Icons.thermostat;
+
+    // 3. JIKA TIDAK ADA PERINGATAN SAMA SEKALI -> TAMPILKAN NORMAL
+    if (alertWidgets.isEmpty) {
+      alertWidgets.add(_buildStatusCard(
+          "System Normal",
+          "Kondisi kompos optimal. Tidak ada peringatan.",
+          Colors.green,
+          Icons.check_circle));
+    }
+
+    // --- LOGIKA WARNA BAR SUHU ---
+    Color tempBarColor = Colors.green;
+    if (sensorData.temp > 65) {
+      tempBarColor = Colors.red;
+    } else if (sensorData.temp > 45) {
+      tempBarColor = Colors.orange;
     }
 
     return Scaffold(
@@ -99,10 +164,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // --- PENGGANTI GRAFIK: STATUS CARD ---
-              // Memberikan insight langsung tanpa perlu baca grafik
-              _buildStatusCard(
-                  statusTitle, statusDesc, statusColor, statusIcon),
+              
+              // --- MENAMPILKAN LIST STATUS CARD (BISA LEBIH DARI SATU) ---
+              Column(
+                children: alertWidgets,
+              ),
 
               SizedBox(height: 24),
               Text('Sensor Overview',
@@ -120,8 +186,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     icon: Icons.thermostat,
                     title: 'Temperature',
                     value: '${sensorData.temp.toStringAsFixed(1)}°C',
-                    percentage: (sensorData.temp / 60.0).clamp(0.0, 1.0),
-                    color: sensorData.temp > 33 ? Colors.red : Colors.orange,
+                    percentage: (sensorData.temp / 80.0).clamp(0.0, 1.0),
+                    color: tempBarColor,
                   )),
                   SizedBox(width: 12),
                   Expanded(
@@ -135,6 +201,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ],
               ),
               SizedBox(height: 12),
+              
+              // --- KARTU GAS ---
               _buildGasSensorCard(sensorData),
 
               SizedBox(height: 24),
@@ -143,7 +211,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       fontSize: 18, fontWeight: FontWeight.w600)),
               SizedBox(height: 12),
 
-              // --- FAN STATUS (READ ONLY) ---
+              // --- FAN STATUS ---
               _buildControlCard(
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -189,7 +257,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               SizedBox(height: 12),
 
-              // --- MOTOR CONTROL (MANUAL) ---
+              // --- MOTOR CONTROL ---
               _buildControlCard(
                 child: Column(
                   children: [
@@ -204,7 +272,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Motor Mixer', // Ganti nama biar beda dikit
+                              Text('Motor Mixer',
                                   style: GoogleFonts.poppins(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w500)),
@@ -219,25 +287,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           activeColor: Colors.green,
                           onChanged: (val) {
                             setState(() => _localSafetyState = val);
-
                             mqttService.publishControlMessage(
-                                0, // Fan ignored
-                                val,
-                                val ? currentSpeedUI.toInt() : 0);
+                                0, val, val ? currentSpeedUI.toInt() : 0);
                           },
                         )
                       ],
                     ),
                     Divider(),
-                    Text('Speed: ${currentSpeedUI.toInt()} / 150',
+                    Text('Speed: ${currentSpeedUI.toInt()} / 255',
                         style: TextStyle(color: Colors.grey)),
 
-                    // --- SLIDER FIX: MAX 150 ---
+                    // Slider Max 255
                     Slider(
                       value: currentSpeedUI,
                       min: 0,
-                      max: 150, // Pastikan ini 150
-                      divisions: 150, // Agar halus
+                      max: 255,
+                      divisions: 255,
                       activeColor: currentSafetyUI ? Colors.green : Colors.grey,
                       thumbColor: currentSafetyUI ? Colors.green : Colors.grey,
                       onChanged: currentSafetyUI
@@ -247,9 +312,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           : null,
                       onChangeEnd: (val) {
                         mqttService.publishControlMessage(
-                            0, // Fan ignored
-                            currentSafetyUI,
-                            val.toInt());
+                            0, currentSafetyUI, val.toInt());
                       },
                     ),
                   ],
@@ -263,12 +326,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- WIDGET BARU: STATUS CARD ---
+  // --- WIDGETS ---
+
   Widget _buildStatusCard(
       String title, String desc, Color color, IconData icon) {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.all(20),
+      // Hapus margin bottom di sini karena kita pakai SizedBox di List
       decoration: BoxDecoration(
           color: color,
           borderRadius: BorderRadius.circular(16),
@@ -366,13 +431,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildGasSensorCard(SensorData data) {
-    bool alert = data.gas > 500;
+    Color cardColor;
+    Color iconColor;
+    Color textColor;
+    IconData? statusIcon;
+    bool showBorder = false;
+
+    if (data.gas > 60) {
+      cardColor = Colors.red[50]!;
+      iconColor = Colors.red;
+      textColor = Colors.red;
+      statusIcon = Icons.warning;
+      showBorder = true;
+    } else if (data.gas > 30) {
+      cardColor = Colors.orange[50]!;
+      iconColor = Colors.orange;
+      textColor = Colors.orange[800]!;
+      statusIcon = Icons.info;
+      showBorder = true;
+    } else {
+      cardColor = Colors.white;
+      iconColor = Colors.blueGrey;
+      textColor = Colors.black;
+      statusIcon = null;
+      showBorder = false;
+    }
+
     return Container(
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: alert ? Colors.red[50] : Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(16),
-        border: alert ? Border.all(color: Colors.red.withOpacity(0.5)) : null,
+        border: showBorder ? Border.all(color: iconColor.withOpacity(0.5)) : null,
         boxShadow: [
           BoxShadow(
               color: Colors.black.withOpacity(0.05),
@@ -384,19 +474,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(children: [
-            Icon(Icons.cloud, color: alert ? Colors.red : Colors.blueGrey),
+            Icon(Icons.cloud, color: iconColor),
             SizedBox(width: 12),
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Gas Level',
                   style: TextStyle(color: Colors.grey, fontSize: 12)),
-              Text('${data.gas} PPM',
+              Text('${data.gas} %',
                   style: GoogleFonts.poppins(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: alert ? Colors.red : Colors.black)),
+                      color: textColor)),
             ])
           ]),
-          if (alert) Icon(Icons.warning, color: Colors.red),
+          if (statusIcon != null) Icon(statusIcon, color: iconColor),
         ],
       ),
     );
